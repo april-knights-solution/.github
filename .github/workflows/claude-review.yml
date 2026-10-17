@@ -1,0 +1,129 @@
+name: Claude PR review
+
+# 各 repo の .github/workflows/claude-review.yml から workflow_call で呼ぶ共通のレビュー。
+# レビューの本体は、この repo の review/review.mjs（Claude Agent SDK）。呼ぶ側の repo には置かない。
+# 呼び出し側の雛形は workflow-templates/claude-review.yml。使い方は README.md。
+
+on:
+  workflow_call:
+    inputs:
+      release_impact:
+        description: "true にすると、コメントの冒頭に「本番に何が出るか」を 1〜2 行で書く（マージで本番に出る repo 用）"
+        type: boolean
+        default: false
+      runs_on:
+        description: 'ランナーのラベルを JSON で。既定は GitHub のホスト型。自前のランナーなら ["self-hosted","ラベル"]'
+        type: string
+        default: '"ubuntu-latest"'
+      model:
+        description: "レビューに使うモデル（sonnet・opus・haiku などの別名か、モデル ID）"
+        type: string
+        default: "sonnet"
+      max_turns:
+        description: "1 回のレビューの上限ターン数"
+        type: number
+        default: 30
+      max_budget_usd:
+        description: "1 回のレビューで使ってよい費用の上限（米ドル、SDK が token 数から計算した値で打ち切る）"
+        type: number
+        default: 2
+      max_changed_lines:
+        description: "追加行と削除行の合計がこれを超える PR はレビューしない"
+        type: number
+        default: 1500
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: true
+
+jobs:
+  review:
+    if: >-
+      github.event_name == 'pull_request' &&
+      !github.event.pull_request.draft &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ${{ fromJSON(inputs.runs_on) }}
+    timeout-minutes: 15
+    concurrency:
+      group: claude-review-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Check PR size
+        id: size
+        env:
+          ADDITIONS: ${{ github.event.pull_request.additions }}
+          DELETIONS: ${{ github.event.pull_request.deletions }}
+          MAX_LINES: ${{ inputs.max_changed_lines }}
+        run: |
+          total=$((ADDITIONS + DELETIONS))
+          if [ "$total" -gt "$MAX_LINES" ]; then
+            echo "変更が ${total} 行で上限 ${MAX_LINES} 行を超えるため、レビューを省略する"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout PR
+        if: steps.size.outputs.skip != 'true'
+        uses: actions/checkout@v7
+        with:
+          path: repo
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout reviewer
+        if: steps.size.outputs.skip != 'true'
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: reviewer
+          sparse-checkout: review
+          persist-credentials: false
+
+      - uses: actions/setup-node@v7
+        if: steps.size.outputs.skip != 'true'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: reviewer/review/package-lock.json
+
+      - name: Install reviewer
+        if: steps.size.outputs.skip != 'true'
+        run: npm ci --prefix reviewer/review --no-audit --no-fund
+
+      - name: Collect diff
+        if: steps.size.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh pr diff "$PR" --repo "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/pr.diff"
+          jq '{repo: .repository.full_name, number: .pull_request.number, title: .pull_request.title,
+               body: (.pull_request.body // ""), author: .pull_request.user.login, base: .pull_request.base.ref}' \
+            "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/pr.json"
+
+      # GitHub のトークンはこのステップに渡さない。Claude が動くプロセスから読めないようにするため
+      - name: Review
+        if: steps.size.outputs.skip != 'true'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MODEL: ${{ inputs.model }}
+          MAX_TURNS: ${{ inputs.max_turns }}
+          MAX_BUDGET_USD: ${{ inputs.max_budget_usd }}
+          RELEASE_IMPACT: ${{ inputs.release_impact }}
+        run: >-
+          node reviewer/review/review.mjs review
+          --meta "$RUNNER_TEMP/pr.json" --diff "$RUNNER_TEMP/pr.diff"
+          --repo "$GITHUB_WORKSPACE/repo" --out "$RUNNER_TEMP/body.md"
+          --model "$MODEL" --max-turns "$MAX_TURNS" --max-budget-usd "$MAX_BUDGET_USD"
+          --release-impact "$RELEASE_IMPACT"
+
+      - name: Post comment
+        if: ${{ !cancelled() && steps.size.outputs.skip != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node reviewer/review/review.mjs post --meta "$RUNNER_TEMP/pr.json" --out "$RUNNER_TEMP/body.md"

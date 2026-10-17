@@ -1,0 +1,6 @@
+# job.workflow_repository / job.workflow_sha は GitHub の文書にある job コンテキストの値だが、
+# actionlint 1.7.12 はまだ知らない。この 2 つの警告だけを外す。
+paths:
+  .github/workflows/claude-review.yml:
+    ignore:
+      - 'property "workflow_(repository|sha)" is not defined in object type'

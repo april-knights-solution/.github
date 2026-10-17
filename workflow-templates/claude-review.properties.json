@@ -1,0 +1,6 @@
+{
+  "name": "Claude PR review",
+  "description": "PR が開かれたり更新されたりしたら、Claude がバグ・セキュリティ・本番への影響を見て日本語でコメントする。repo に ANTHROPIC_API_KEY の secret が要る。",
+  "iconName": "octicon code-review",
+  "categories": ["Code review"]
+}
