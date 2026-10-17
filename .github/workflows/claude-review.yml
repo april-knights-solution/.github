@@ -118,7 +118,8 @@ jobs:
         run: >-
           node reviewer/review/review.mjs review
           --meta "$RUNNER_TEMP/pr.json" --diff "$RUNNER_TEMP/pr.diff"
-          --repo "$GITHUB_WORKSPACE/repo" --out "$RUNNER_TEMP/body.md"
+          --repo "$GITHUB_WORKSPACE/repo" --shared "$GITHUB_WORKSPACE/reviewer/.github"
+          --out "$RUNNER_TEMP/body.md"
           --model "$MODEL" --max-turns "$MAX_TURNS" --max-budget-usd "$MAX_BUDGET_USD"
           --release-impact "$RELEASE_IMPACT"
 
