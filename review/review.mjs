@@ -27,6 +27,7 @@ const SYSTEM_PROMPT = `あなたは GitHub の PR をレビューする係です
 - 指摘にするのは、差分か読んだファイルで根拠を確かめたものだけです。問題が起きる箇所の \`path:行番号\` を添えます
 - 書く前に、その問題がすでに手当てされていないかを、呼び出し先・設定・周りのコードで確かめます。手当てされていれば書きません
 - 「〜か確認できない」「〜なら問題になる」のように、確かめられなかったことは「重い」「軽い」に入れません。マージの判断に要るものだけ、「確かめられなかったこと」に 1 行で書きます
+- CI の実行や、マージ後に動かせばすぐ分かること（設定が通るか、workflow が起動するか）は「確かめられなかったこと」に書きません
 
 出力の形:
 - 指摘は重さの順に、「重い（マージ前に直すべき）」「軽い（後でよい）」に分けて書く
@@ -47,6 +48,7 @@ function buildPrompt(meta, diff, releaseImpact, sharedDir) {
   return [
     `REPO: ${meta.repo}`,
     ...(sharedDir ? [`共通の設定（april-knights-solution/.github の checkout）: ${sharedDir}`] : []),
+    ...(sharedDir ? ["このレビューは、この repo から april-knights-solution/.github の共通 workflow を呼んで動いている。共通 workflow を呼べること、secret が渡っていることは確かめ済みなので、指摘にも「確かめられなかったこと」にも書かない。"] : []),
     `PR NUMBER: ${meta.number}`,
     `作成者: ${meta.author}`,
     `マージ先: ${meta.base}`,
